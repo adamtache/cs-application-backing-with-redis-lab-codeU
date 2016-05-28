@@ -4,10 +4,8 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 
 import org.jsoup.select.Elements;
 
@@ -30,7 +28,7 @@ public class JedisIndex {
 	public JedisIndex(Jedis jedis) {
 		this.jedis = jedis;
 	}
-	
+
 	/**
 	 * Returns the Redis key for a given search term.
 	 * 
@@ -39,7 +37,7 @@ public class JedisIndex {
 	private String urlSetKey(String term) {
 		return "URLSet:" + term;
 	}
-	
+
 	/**
 	 * Returns the Redis key for a URL's TermCounter.
 	 * 
@@ -59,7 +57,7 @@ public class JedisIndex {
 		String redisKey = termCounterKey(url);
 		return jedis.exists(redisKey);
 	}
-	
+
 	/**
 	 * Looks up a search term and returns a set of URLs.
 	 * 
@@ -67,22 +65,26 @@ public class JedisIndex {
 	 * @return Set of URLs.
 	 */
 	public Set<String> getURLs(String term) {
-        // FILL THIS IN!
-		return null;
+		return jedis.smembers(this.urlSetKey(term));
 	}
 
-    /**
+	/**
 	 * Looks up a term and returns a map from URL to count.
 	 * 
 	 * @param term
 	 * @return Map from URL to count.
 	 */
 	public Map<String, Integer> getCounts(String term) {
-        // FILL THIS IN!
-		return null;
+		Map<String, Integer> urlTermCounts = new HashMap<>();
+		Set<String> urls = this.getURLs(term);
+		for(String url : urls){
+			Integer count = this.getCount(url, term);
+			urlTermCounts.put(url, count);
+		}
+		return urlTermCounts;
 	}
 
-    /**
+	/**
 	 * Returns the number of times the given term appears at the given URL.
 	 * 
 	 * @param url
@@ -90,10 +92,27 @@ public class JedisIndex {
 	 * @return
 	 */
 	public Integer getCount(String url, String term) {
-        // FILL THIS IN!
-		return null;
+		String termCounterKey = this.termCounterKey(url);
+		String lookup = jedis.hget(termCounterKey, term);
+		return this.tryParse(lookup);
 	}
 
+	/**
+	 * If term is an Integer, returns its value. If not returns 0.
+	 * 
+	 * @param term
+	 * @return
+	 */
+	private Integer tryParse(String term){
+		if(term == null){
+			return 0;
+		}
+		try {
+			return Integer.parseInt(term);
+		} catch (NumberFormatException e) {
+			return 0;
+		}
+	}
 
 	/**
 	 * Add a page to the index.
@@ -102,7 +121,25 @@ public class JedisIndex {
 	 * @param paragraphs  Collection of elements that should be indexed.
 	 */
 	public void indexPage(String url, Elements paragraphs) {
-        // FILL THIS IN!
+		TermCounter tc = new TermCounter(url);
+		tc.processElements(paragraphs);
+		this.processTermCounter(tc);
+	}
+	
+	/**
+	 * Processes TermCounter by taking its url, terms, and term counts and adding them to Redis data structures.
+	 * 
+	 * @param tc
+	 */
+	private void processTermCounter(TermCounter tc){
+		String counterURL = tc.getLabel();
+		Transaction t = jedis.multi();
+		String termCounterKey = this.termCounterKey(counterURL);
+		for(String term : tc.keySet()){
+			t.sadd(this.urlSetKey(term), counterURL);
+			t.hset(termCounterKey, term, tc.get(term).toString());
+		}
+		t.exec();
 	}
 
 	/**
@@ -114,7 +151,7 @@ public class JedisIndex {
 		// loop through the search terms
 		for (String term: termSet()) {
 			System.out.println(term);
-			
+
 			// for each term, print the pages where it appears
 			Set<String> urls = getURLs(term);
 			for (String url: urls) {
@@ -222,12 +259,12 @@ public class JedisIndex {
 	public static void main(String[] args) throws IOException {
 		Jedis jedis = JedisMaker.make();
 		JedisIndex index = new JedisIndex(jedis);
-		
+
 		//index.deleteTermCounters();
 		//index.deleteURLSets();
 		//index.deleteAllKeys();
 		loadIndex(index);
-		
+
 		Map<String, Integer> map = index.getCounts("the");
 		for (Entry<String, Integer> entry: map.entrySet()) {
 			System.out.println(entry);
@@ -246,7 +283,7 @@ public class JedisIndex {
 		String url = "https://en.wikipedia.org/wiki/Java_(programming_language)";
 		Elements paragraphs = wf.readWikipedia(url);
 		index.indexPage(url, paragraphs);
-		
+
 		url = "https://en.wikipedia.org/wiki/Programming_language";
 		paragraphs = wf.readWikipedia(url);
 		index.indexPage(url, paragraphs);
